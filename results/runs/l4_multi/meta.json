@@ -1,0 +1,15 @@
+{
+  "level": "L4",
+  "approach": "mcp_multiagent",
+  "model": "GLM-5.3 (через сессию)",
+  "executor": "session-subagent",
+  "wall_seconds": 723.0,
+  "iterations": 4,
+  "roles": [
+    "аналитик (210с, план)",
+    "писатель (272с, 61 функция)",
+    "критик (240с, MCP-инструменты, 1 цикл правок)"
+  ],
+  "internal_subagent_tokens": 507114,
+  "note": "Конвейер из 3 субагентов; критик вызывал инструменты через настоящий MCP-сервер (tools/mcp_client.py -> mcp_testserver.py, JSON-RPC stdio). Токены: tiktoken по инструкциям/плану/артефактам; внутренние tool-выводы учтены частично (см. REPORT)."
+}

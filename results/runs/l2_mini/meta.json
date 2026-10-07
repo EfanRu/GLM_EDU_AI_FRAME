@@ -1,0 +1,10 @@
+{
+  "level": "L2",
+  "approach": "mini_harness",
+  "model": "GLM-5.3 (через сессию)",
+  "executor": "session-subagent",
+  "wall_seconds": 472.9,
+  "iterations": 3,
+  "tool_calls": 2,
+  "note": "Релейная эмуляция цикла mini_agent.py: агент просит RUN_TESTS, оператор (харнесс) возвращает вывод pytest. Токены: tiktoken по всем промптам и ответам."
+}

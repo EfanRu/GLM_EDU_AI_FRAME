@@ -1,0 +1,8 @@
+Результат pytest (окружение: пакет ordercalc лежит рядом с тест-файлом):
+
+1 failed, 147 passed — TestExpirePoints::test_leap_year_boundary[on_date0-0]
+AssertionError: assert 50 == 0 — expire_points([('2023-03-01', 50)], datetime.date(2023, 3, 1))
+
+(полный вывод pytest с traceback, ~1500 символов)
+
+Исправь тесты и снова ответь код-блоком + RUN_TESTS, либо, если всё зелёное, выдай финальный полный код одним ```python-блоком без RUN_TESTS. Ничего не читай и не запускай сам.

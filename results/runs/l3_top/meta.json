@@ -1,0 +1,11 @@
+{
+  "level": "L3",
+  "approach": "top_harness",
+  "model": "GLM-5.3 (через сессию)",
+  "executor": "session-subagent",
+  "wall_seconds": 217.0,
+  "iterations": 3,
+  "tool_uses": 19,
+  "internal_subagent_tokens": 278909,
+  "note": "Субагент ZCode с полными инструментами. Вход: инструкция + прочитанные исходники; выход: итоговое сообщение + файл. Внутренние итерации (вывод pytest/coverage) в токенах не учитаны — реальный API-харнесс заплатил бы больше (см. REPORT)."
+}

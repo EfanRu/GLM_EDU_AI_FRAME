@@ -1,0 +1,2 @@
+Ты — ПИСАТЕЛЬ ТЕСТОВ (роль 2 из 3). Прочитай план: results/runs/l4_multi/plan.md — единственный разрешённый файл. Запрещено: demo_project/**, results/runs/** (кроме плана), evaluation/**, levels/**; запрещено запускать pytest/coverage.
+Напиши results/runs/l4_multi/test_ordercalc.py: только pytest+stdlib, импорты from ordercalc.<module> import ..., реализуй ВСЕ пункты плана (типовые, граничные, невалидные, инварианты), параметризация. Ответ — 2 строки: путь и число test-функций.

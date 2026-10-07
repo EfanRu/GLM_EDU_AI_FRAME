@@ -1,0 +1,2 @@
+/home/slava/Documents/GLM_EDU_AI_FRAME/ai_dev_ladder/results/runs/l4_multi/test_ordercalc.py
+61 test-функция (все пункты плана: типовые, граничные, невалидные с точными сообщениями, инварианты, half-up округление, пороги включительно, 365-дневное окно, smoke пакета).

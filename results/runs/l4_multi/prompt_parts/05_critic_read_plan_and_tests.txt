@@ -1,0 +1,1039 @@
+# Тест-план: библиотека `ordercalc`
+
+Пакет `demo_project/ordercalc` содержит три модуля: `discounts`, `split`, `loyalty`.
+План самодостаточен: все ожидаемые значения вычислены по эталонной логике, исходники для написания тестов не нужны.
+
+Импорты в тестах:
+```python
+from ordercalc.discounts import apply_tier_discount, bulk_discount_percent
+from ordercalc.split import split_payment, split_weighted
+from ordercalc.loyalty import points_for_order, expire_points
+```
+
+Общие конвенции (проверяются всеми модулями):
+- Все денежные величины — целые центы (`int`). Возврат тоже `int` (или `list[int]`).
+- Все невалидные входы — `ValueError` с точными сообщениями, указанными ниже (можно проверять через `pytest.raises(ValueError, match=...)` с экранированием).
+- Округление — арифметическое half-up (`.5` всегда вверх), НЕ банковское округление Python (`round(0.5) == 0`, `round(2.5) == 2` — так делать НЕ должно быть).
+
+---
+
+## 1. Модуль `discounts`
+
+### 1.1. `apply_tier_discount(total_cents: int, tier: str) -> int`
+
+Возвращает сумму со скидкой уровня. Проценты: bronze 0%, silver 5%, gold 10%, platinum 15%.
+Формула: `total_cents * (100 - pct) / 100`, округление half-up до целого цента.
+
+#### Типовые случаи
+
+| Вход (total_cents, tier) | Ожидание |
+|---|---|
+| `(1000, "bronze")` | `1000` (0%) |
+| `(1000, "silver")` | `950` |
+| `(1000, "gold")` | `900` |
+| `(1000, "platinum")` | `850` |
+| `(100, "silver")` | `95` |
+| `(20, "silver")` | `19` |
+| `(12345, "bronze")` | `12345` |
+| `(12345, "silver")` | `11728` (12345 × 0.95 = 11727.75 → вверх) |
+| `(999, "gold")` | `899` (899.1 → 899) |
+| `(999, "platinum")` | `849` (849.15 → 849) |
+| `(12345, "gold")` | `11111` (11110.5 → 11111, ровно .5 вверх) |
+
+#### Граничные условия
+
+- Нулевая сумма: `apply_tier_discount(0, t) == 0` для каждого из 4 уровней.
+- Округление ровно `.5` — дробная часть равна ½, ожидается округление ВВЕРХ. Кейсы, где встроенный `round()` (banker's) дал бы ДРУГОЕ значение — они обязательны:
+  - `(10, "platinum")` → 8.5 → `9` (banker's round(8.5) = 8 — ключевой кейс)
+  - `(30, "silver")` → 28.5 → `29` (banker's round(28.5) = 28)
+  - `(25, "gold")` → 22.5 → `23` (banker's round(22.5) = 22)
+  - `(110, "silver")` → 104.5 → `105` (banker's round(104.5) = 104)
+  - `(50, "platinum")` → 42.5 → `43` (banker's round(42.5) = 42)
+  - `(12345, "gold")` → 11110.5 → `11111` (banker's round = 11110)
+  - Дополнительные (banker's здесь совпал бы, но half-up всё равно вверх):
+    - `(5, "gold")` → 4.5 → `5`
+    - `(10, "silver")` → 9.5 → `10`
+    - `(30, "platinum")` → 25.5 → `26`
+    - `(110, "platinum")` → 93.5 → `94`
+- Дробь чуть меньше/больше .5:
+  - `(1, "bronze")` → `1`; `(1, "silver")` → 0.95 → `1`; `(1, "gold")` → 0.9 → `1`; `(1, "platinum")` → 0.85 → `1`
+  - `(2, "platinum")` → 1.7 → `2`; `(9, "platinum")` → 7.65 → `8`
+- Порог включительности здесь отсутствует (скидка непрерывная), но проверить все 4 ключа `TIERS` = `{"bronze":0, "silver":5, "gold":10, "platinum":15}` — по одному кейсу на уровень.
+
+#### Невалидные входы
+
+| Вход | Ошибка | Точное сообщение |
+|---|---|---|
+| `(-1, "gold")` | `ValueError` | `total_cents must be >= 0` |
+| `(0, -100)` | `ValueError` | `total_cents must be >= 0` |
+| `(100, "diamond")` | `ValueError` | `unknown tier: 'diamond'` |
+| `(100, "Gold")` | `ValueError` (реестр чувствителен, ключи только нижним регистром) | `unknown tier: 'Gold'` |
+| `(100, "GOLD")` | `ValueError` | `unknown tier: 'GOLD'` |
+| `(100, "")` | `ValueError` | `unknown tier: ''` |
+| `(100, "gold ")` (с пробелом) | `ValueError` | `unknown tier: 'gold '` |
+| `(100, None)` | `ValueError` | `unknown tier: None` |
+
+Порядок проверок: сначала `total_cents < 0`, потом неизвестный tier. `(-1, "diamond")` → сообщение про `total_cents`.
+
+#### Инварианты
+
+- `0 <= apply_tier_discount(x, t) <= x` для любого валидного `x >= 0` и уровня.
+- Результат для bronze всегда равен входу.
+- Результат монотонен по уровню: bronze >= silver >= gold >= platinum для одного и того же `total_cents` (например, для `1000`: 1000 >= 950 >= 900 >= 850).
+
+### 1.2. `bulk_discount_percent(qty: int) -> int`
+
+Скидка за объём в процентах. Пороги «от N шт.» включают N: `qty >= 100` → 12; `qty >= 50` → 7; `qty >= 10` → 3; иначе 0.
+
+#### Типовые случаи
+
+| Вход | Ожидание |
+|---|---|
+| `0` | `0` |
+| `1` | `0` |
+| `5` | `0` |
+| `10` | `3` |
+| `25` | `3` |
+| `50` | `7` |
+| `75` | `7` |
+| `100` | `12` |
+| `250` | `12` |
+| `1000000` | `12` |
+
+#### Граничные условия (пороги включительно)
+
+| Вход | Ожидание | Смысл |
+|---|---|---|
+| `9` | `0` | на 1 меньше порога 10 |
+| `10` | `3` | порог включительно |
+| `49` | `3` | на 1 меньше порога 50 |
+| `50` | `7` | порог включительно |
+| `99` | `7` | на 1 меньше порога 100 |
+| `100` | `12` | порог включительно |
+| `101` | `12` | выше порога |
+
+#### Невалидные входы
+
+| Вход | Ошибка | Сообщение |
+|---|---|---|
+| `-1` | `ValueError` | `qty must be >= 0` |
+| `-100` | `ValueError` | `qty must be >= 0` |
+
+#### Инварианты
+
+- Результат всегда один из `{0, 3, 7, 12}`.
+- Монотонность: если `qty1 <= qty2`, то `bulk_discount_percent(qty1) <= bulk_discount_percent(qty2)`.
+
+---
+
+## 2. Модуль `split`
+
+### 2.1. `split_payment(amount_cents: int, parts: int) -> list[int]`
+
+Делит сумму на `parts` частей целыми центами. `base, rem = divmod(amount, parts)`; первые `rem` частей получают `base + 1`, остальные `base`. Остаток раздаётся по одному центу ПЕРВЫМ частям.
+
+#### Типовые случаи
+
+| Вход | Ожидание |
+|---|---|
+| `(100, 4)` | `[25, 25, 25, 25]` |
+| `(101, 4)` | `[26, 25, 25, 25]` (1 цент остатка — первой части) |
+| `(103, 4)` | `[26, 26, 26, 25]` (3 цента остатка — первым трём) |
+| `(10, 3)` | `[4, 3, 3]` |
+| `(100, 3)` | `[34, 33, 33]` |
+| `(1000, 3)` | `[334, 333, 333]` |
+| `(5, 1)` | `[5]` |
+| `(7, 7)` | `[1, 1, 1, 1, 1, 1, 1]` |
+| `(7, 6)` | `[2, 1, 1, 1, 1, 1]` |
+| `(11, 10)` | `[2, 1, 1, 1, 1, 1, 1, 1, 1, 1]` |
+| `(19, 10)` | `[2, 2, 2, 2, 2, 2, 2, 2, 2, 1]` (rem=9) |
+| `(6, 4)` | `[2, 2, 1, 1]` |
+
+#### Граничные условия
+
+- Нулевая сумма, одна часть: `(0, 1)` → `[0]`.
+- Нулевая сумма, несколько частей: `(0, 2)` → `ValueError` (0 < 2 — «не хватит по центу на часть»), сообщение `amount_cents is less than number of parts`.
+- Минимально достаточная сумма: `(7, 7)` → `[1]*7`; `(1, 1)` → `[1]`.
+- Сумма ровно на 1 меньше числа частей: `(2, 3)` → `ValueError`; `(5, 6)` → `ValueError`.
+- Идеальное деление без остатка (rem = 0): `(100, 4)`; `(9, 3)` → `[3, 3, 3]`.
+- Максимальный разброс остатка (rem = parts - 1): `(19, 10)` выше.
+
+#### Невалидные входы
+
+| Вход | Ошибка | Сообщение |
+|---|---|---|
+| `(-1, 2)` | `ValueError` | `amount_cents must be >= 0` |
+| `(-100, 1)` | `ValueError` | `amount_cents must be >= 0` |
+| `(100, 0)` | `ValueError` | `parts must be >= 1` |
+| `(100, -3)` | `ValueError` | `parts must be >= 1` |
+| `(3, 5)` | `ValueError` | `amount_cents is less than number of parts` |
+| `(0, 0)` | `ValueError` | `parts must be >= 1` (проверка parts идёт второй, после amount) |
+| `(-5, 0)` | `ValueError` | `amount_cents must be >= 0` (проверка amount идёт первой) |
+
+#### Инварианты (для любого валидного входа)
+
+1. `sum(result) == amount_cents` — сумма частей обязана равняться исходной сумме.
+2. `len(result) == parts`.
+3. Все части различаются не более чем на 1 цент: `max(result) - min(result) <= 1`.
+4. Все части `> 0` при `amount_cents >= parts`.
+5. Части не возрастают: первые `rem` равны `base+1`, остальные `base`; лишние центы — у первых частей.
+
+### 2.2. `split_weighted(amount_cents: int, weights: list[int]) -> list[int]`
+
+Пропорциональное разбиение методом наибольших остатков: каждой части `floor(amount*w_i/total_w)`; недостающие центы (`rem = amount - sum(base)`) получают части с наибольшей ДРОБНОЙ частью; при равенстве дробных частей — та, что РАНЬШЕ в списке.
+
+#### Типовые случаи
+
+| Вход | Ожидание | Пояснение |
+|---|---|---|
+| `(100, [50, 50])` | `[50, 50]` | делится ровно |
+| `(100, [1, 1, 1])` | `[34, 33, 33]` | по 33.33; дробные равны → +1 первой |
+| `(100, [1, 1, 1, 1])` | `[25, 25, 25, 25]` | ровно |
+| `(100, [1, 2])` | `[33, 67]` | 33.33/66.67; наибольшая дробная у второй |
+| `(100, [2, 3])` | `[40, 60]` | ровно |
+| `(99, [2, 3])` | `[40, 59]` | 39.6/59.4; наибольшая дробная (0.6) у первой |
+| `(101, [2, 3])` | `[40, 61]` | 40.4/60.6; наибольшая дробная (0.6) у второй |
+| `(50, [1, 1, 1])` | `[17, 17, 16]` | rem=2; дробные равны → +1 первым двум |
+| `(101, [1, 1, 1])` | `[34, 34, 33]` | rem=2; равенство → порядок списка |
+| `(103, [1, 1, 1])` | `[35, 34, 34]` | rem=1; равенство → первой |
+| `(10, [1, 1, 1])` | `[4, 3, 3]` | rem=1; равенство → первой |
+| `(3, [1, 1, 1])` | `[1, 1, 1]` | ровно |
+| `(2, [1, 1, 1])` | `[1, 1, 0]` | rem=2; равенство → первым двум |
+| `(1, [1, 1])` | `[1, 0]` | 0.5/0.5; равенство → первой |
+| `(1, [1, 1, 1])` | `[1, 0, 0]` | rem=1; равенство → первой |
+| `(100, [1, 1, 2])` | `[25, 25, 50]` | ровно |
+| `(100, [3, 3, 3, 1])` | `[30, 30, 30, 10]` | ровно |
+| `(101, [3, 3, 3, 1])` | `[31, 30, 30, 10]` | 30.3×3 и 10.1; наибольшая дробная 0.3, равенство → первой |
+| `(1000, [1, 0, 1])` | `[500, 0, 500]` | нулевой вес получает 0 |
+| `(100, [0, 0, 1])` | `[0, 0, 100]` | нулевые веса получают 0 |
+| `(5, [3, 2])` | `[3, 2]` | ровно |
+| `(7, [1, 2, 4])` | `[1, 2, 4]` | ровно |
+
+#### Граничные условия
+
+- Нулевая сумма: `(0, [1, 2, 3])` → `[0, 0, 0]`.
+- Нулевая сумма с нулевыми весами: `(0, [0, 0])` → `ValueError` (сумма весов 0) — см. невалидные.
+- Один вес: `(100, [7])` → `[100]`; `(0, [7])` → `[0]`.
+- Ровно половина (дробь 0.5 и равенство): `(1, [1, 1])` → `[1, 0]` — тай-брейк по индексу, а не «вниз».
+- Дробь 0.5 против меньшей дроби: `(1, [1, 3])`: 0.25/0.75 → `[0, 1]`.
+- Распределение остатка только по дробным частям, целые части не трогаются: `(101, [3, 3, 3, 1])` — единственный лишний цент у индекса 0, часть с весом 1 (дробная 0.1) не получает ничего.
+- Нулевой вес при положительной сумме: `(100, [0, 1])` → `[0, 100]`.
+
+Примечание для писателя тестов: внутренняя арифметика — float, поэтому использовать только «маленькие» числа из таблиц (дроби либо точно представимы в двоичном виде, либо одинаково вычислены для равных весов). Кейсы выше подобраны так, что float-погрешность не влияет.
+
+#### Невалидные входы
+
+| Вход | Ошибка | Сообщение |
+|---|---|---|
+| `(-1, [1, 2])` | `ValueError` | `amount_cents must be >= 0` |
+| `(100, [])` | `ValueError` | `weights must not be empty` |
+| `(0, [])` | `ValueError` | `weights must not be empty` |
+| `(100, [1, -1])` | `ValueError` | `weights must be >= 0` |
+| `(100, [-5, 10])` | `ValueError` | `weights must be >= 0` |
+| `(100, [0, 0])` | `ValueError` | `weights sum must be > 0` |
+| `(0, [0, 0, 0])` | `ValueError` | `weights sum must be > 0` |
+| `(-1, [])` | `ValueError` | `amount_cents must be >= 0` (amount проверяется первым) |
+| `(-1, [-2])` | `ValueError` | `amount_cents must be >= 0` (amount проверяется первым) |
+
+#### Инварианты
+
+1. `sum(result) == amount_cents` — всегда, включая кейсы с остатком.
+2. `len(result) == len(weights)`.
+3. Часть с весом 0 всегда получает 0.
+4. Каждая часть равна `floor(exact_i)` или `floor(exact_i) + 1` (не больше +1 над полом).
+5. При равных весах результат совпадает с равномерным разбиением: `split_weighted(101, [1, 1, 1]) == split_payment(101, 3) == [34, 34, 33]`.
+
+---
+
+## 3. Модуль `loyalty`
+
+### 3.1. `points_for_order(total_cents: int, history_cents: int = 0) -> int`
+
+Базовые баллы: `total_cents // 100` — 1 балл за каждое ПОЛНОЕ число сотен центов (floor). Множитель по истории: `history_cents >= 500000` (5000.00) → x3; `>= 100000` (1000.00) → x2; иначе x1. Итог: `base * multiplier`. Параметр `history_cents` имеет значение по умолчанию `0`.
+
+#### Типовые случаи
+
+| Вход (total, history) | Ожидание | Пояснение |
+|---|---|---|
+| `(0, 0)` | `0` | 0 полных сотен |
+| `(0)` (default) | `0` | history по умолчанию 0, x1 |
+| `(99, 0)` | `0` | неполная сотня |
+| `(100, 0)` | `1` | ровно одна сотня |
+| `(199, 0)` | `1` | floor(1.99) = 1 |
+| `(250, 0)` | `2` | |
+| `(9999, 0)` | `99` | 99 полных сотен |
+| `(12345, 0)` | `123` | |
+| `(1000, 0)` | `10` | x1 |
+| `(1000, 50000)` | `10` | история ниже порога, x1 |
+| `(1000, 100000)` | `20` | x2 |
+| `(1000, 250000)` | `20` | x2 |
+| `(1000, 499999)` | `20` | x2 |
+| `(1000, 500000)` | `30` | x3 |
+| `(1000, 1000000)` | `30` | x3 |
+| `(1500, 250000)` | `30` | 15 × 2 |
+| `(1500, 600000)` | `45` | 15 × 3 |
+| `(0, 500000)` | `0` | 0 × 3 = 0 |
+| `(99, 500000)` | `0` | 0 полных сотен, множитель не помогает |
+| `(12345, 100000)` | `246` | 123 × 2 |
+| `(12345, 500000)` | `369` | 123 × 3 |
+
+#### Граничные условия (пороги включительно)
+
+| Вход | Ожидание | Смысл |
+|---|---|---|
+| `(1000, 99999)` | `10` | на 1 цент ниже порога x2 |
+| `(1000, 100000)` | `20` | порог x2 включительно (100000 центов = 1000.00) |
+| `(1000, 499999)` | `20` | на 1 цент ниже порога x3 |
+| `(1000, 500000)` | `30` | порог x3 включительно (500000 центов = 5000.00) |
+
+Границы полных сотен (floor, не round):
+- `(99, 0)` → 0; `(100, 0)` → 1; `(101, 0)` → 1; `(199, 0)` → 1; `(200, 0)` → 2.
+
+Множитель выбирается от БОЛЬШЕГО порога: при `history >= 500000` применяется x3, а не x2.
+
+#### Невалидные входы
+
+| Вход | Ошибка | Сообщение |
+|---|---|---|
+| `(-1, 0)` | `ValueError` | `total_cents must be >= 0` |
+| `(-100, 1000)` | `ValueError` | `total_cents must be >= 0` |
+| `(100, -1)` | `ValueError` | `history_cents must be >= 0` |
+| `(100, -100000)` | `ValueError` | `history_cents must be >= 0` |
+| `(-1, -1)` | `ValueError` | `total_cents must be >= 0` (total проверяется первым) |
+| `(0, -1)` | `ValueError` | `history_cents must be >= 0` |
+
+#### Инварианты
+
+- Результат кратен `total_cents // 100`.
+- Результат с history >= 500000 ровно в 3 раза больше результата с той же суммой и history = 0.
+- `history_cents` не добавляет баллов само по себе: `points_for_order(x, h)` при `x < 100` всегда 0.
+
+### 3.2. `expire_points(entries, on_date: date) -> int`
+
+Суммирует баллы записей, действительных на `on_date`. Запись `(iso, points)` действительна, если `accrual <= on_date <= accrual + 365 дней` — ОБА конца включительно. Окно — 366 календарных дней. Дата начисления — ISO-строка (парсинг `date.fromisoformat`).
+
+#### Типовые случаи
+
+1. День начисления — действителен:
+   `expire_points([("2024-01-01", 10)], date(2024, 1, 1))` → `10`.
+2. Последний день жизни (обычный год):
+   `expire_points([("2023-01-01", 10)], date(2024, 1, 1))` → `10` (2023-01-01 + 365 = 2024-01-01, год 2023 невисокосный).
+3. Первый день после истечения:
+   `expire_points([("2023-01-01", 10)], date(2024, 1, 2))` → `0`.
+4. Несколько записей, часть истекла:
+   `expire_points([("2024-01-01", 10), ("2024-06-15", 20), ("2020-01-01", 100)], date(2024, 7, 1))` → `30` (10 + 20; запись 2020 истекла).
+5. Все истекли:
+   `expire_points([("2020-01-01", 50), ("2021-05-05", 60)], date(2024, 7, 1))` → `0`.
+6. Пустой список:
+   `expire_points([], date(2024, 7, 1))` → `0`.
+7. Запись в будущем относительно on_date:
+   `expire_points([("2024-06-01", 10)], date(2024, 5, 31))` → `0`.
+8. Нулевые баллы:
+   `expire_points([("2024-01-01", 0)], date(2024, 1, 1))` → `0`.
+
+#### Граничные условия: 365 дней и високосные годы
+
+| entries | on_date | Ожидание | Пояснение |
+|---|---|---|---|
+| `[("2024-01-01", 10)]` | `date(2024, 1, 1)` | `10` | день начисления включительно |
+| `[("2024-01-01", 10)]` | `date(2024, 12, 31)` | `10` | +365 дней в високосном 2024 (Jan 1 + 365 = Dec 31) — последний день |
+| `[("2024-01-01", 10)]` | `date(2025, 1, 1)` | `0` | +366 — истёк |
+| `[("2023-01-01", 10)]` | `date(2024, 1, 1)` | `10` | +365 в невисокосном 2023 переходит через Новый год |
+| `[("2023-01-01", 10)]` | `date(2024, 1, 2)` | `0` | +366 — истёк |
+| `[("2023-03-01", 5)]` | `date(2024, 2, 28)` | `5` | последний день перед високосным |
+| `[("2023-03-01", 5)]` | `date(2024, 2, 29)` | `5` | +365 попадает точно на 29 февраля 2024 (2023-03-01 + 365 = 2024-02-29) — ещё действует |
+| `[("2023-03-01", 5)]` | `date(2024, 3, 1)` | `0` | истёк |
+| `[("2024-02-29", 5)]` | `date(2025, 2, 28)` | `5` | начисление в високосный день: +365 = 2025-02-28, последний день |
+| `[("2024-02-29", 5)]` | `date(2025, 3, 1)` | `0` | истёк |
+| `[("2023-12-31", 10)]` | `date(2024, 12, 30)` | `10` | +365 = 2024-12-30 (2024 високосный — 366 дней) |
+| `[("2023-12-31", 10)]` | `date(2024, 12, 31)` | `0` | +366 — истёк |
+| `[("2024-01-01", 10)]` | `date(2023, 12, 31)` | `0` | on_date раньше начисления |
+
+#### Невалидные входы
+
+Модуль не валидирует даты сам; неверный формат ISO-строки даёт `ValueError` из `datetime.date.fromisoformat`:
+
+| entries | Ошибка |
+|---|---|
+| `[("2024-13-01", 10)]` (несуществующий месяц) | `ValueError` |
+| `[("2024-02-30", 10)]` (несуществующий день) | `ValueError` |
+| `[("01-01-2024", 10)]` (не ISO порядок) | `ValueError` |
+| `[("2024/01/01", 10)]` (слэши вместо дефисов) | `ValueError` |
+| `[("2024-1-1", 10)]` (без ведущих нулей) | `ValueError` |
+| `[("not-a-date", 10)]` | `ValueError` |
+
+Точное сообщение — стандартное для `fromisoformat` (например, `Invalid isoformat string: 'not-a-date'`); в тестах достаточно проверять тип `ValueError`.
+
+#### Инварианты
+
+- Результат — сумма `points` всех записей, попадающих в окно `[accrual, accrual + 365]` включительно.
+- Окно содержит ровно 366 календарных дат; `on_date = accrual` и `on_date = accrual + timedelta(days=365)` входят, `+366` — нет.
+- Результат не зависит от порядка записей в списке (сложение коммутативно).
+
+---
+
+## 4. Пакет `__init__` (минимальный smoke)
+
+- `import ordercalc` выполняется без ошибок.
+- `ordercalc.__all__ == ["discounts", "split", "loyalty"]`.
+- `from ordercalc import discounts, split, loyalty` — все три модуля доступны как атрибуты пакета.
+- Публичные функции импортируются по путям из шапки плана.
+
+---
+
+## 5. Сводный чек-лист приоритетов
+
+1. Пороги включительно: 10/50/100 шт., 100000/500000 центов истории, `qty >= N`.
+2. Округление half-up ровно на `.5` (10/platinum → 9; 30/silver → 29; 25/gold → 23; 12345/gold → 11111) — не banker's rounding.
+3. Floor полных сотен: 99 → 0, 100 → 1, 199 → 1.
+4. Распределение остатка центов: split_payment — первым частям; split_weighted — наибольшим дробным, при равенстве более раннему индексу (`(1, [1, 1])` → `[1, 0]`).
+5. Инвариант суммы: `sum(split_payment(...)) == amount` и `sum(split_weighted(...)) == amount` для всех табличных кейсов.
+6. Границы 365 дней: `accrual`, `accrual + 365` (действует), `accrual + 366` (истёк); високосные 2024-02-29 и переходы через 29 февраля.
+7. Точные сообщения `ValueError` и порядок проверок (amount/total первым).
+8. Пустые входы: `[]` weights, `[]` entries, `parts < 1`, `weights` из нулей.
+
+
+=== test_ordercalc.py (версия от писателя, до правок) ===
+from datetime import date, timedelta
+
+import pytest
+
+import ordercalc
+from ordercalc import discounts, loyalty, split
+from ordercalc.discounts import apply_tier_discount, bulk_discount_percent
+from ordercalc.loyalty import expire_points, points_for_order
+from ordercalc.split import split_payment, split_weighted
+
+ALL_TIERS = ("bronze", "silver", "gold", "platinum")
+
+SPLIT_PAYMENT_VALID_CASES = [
+    (100, 4),
+    (101, 4),
+    (103, 4),
+    (10, 3),
+    (100, 3),
+    (1000, 3),
+    (5, 1),
+    (7, 7),
+    (7, 6),
+    (11, 10),
+    (19, 10),
+    (6, 4),
+    (9, 3),
+    (1, 1),
+]
+
+SPLIT_PAYMENT_POSITIVE_CASES = [
+    (amount, parts) for amount, parts in SPLIT_PAYMENT_VALID_CASES if amount >= parts
+]
+
+SPLIT_WEIGHTED_VALID_CASES = [
+    (100, [50, 50]),
+    (100, [1, 1, 1]),
+    (100, [1, 1, 1, 1]),
+    (100, [1, 2]),
+    (100, [2, 3]),
+    (99, [2, 3]),
+    (101, [2, 3]),
+    (50, [1, 1, 1]),
+    (101, [1, 1, 1]),
+    (103, [1, 1, 1]),
+    (10, [1, 1, 1]),
+    (3, [1, 1, 1]),
+    (2, [1, 1, 1]),
+    (1, [1, 1]),
+    (1, [1, 1, 1]),
+    (100, [1, 1, 2]),
+    (100, [3, 3, 3, 1]),
+    (101, [3, 3, 3, 1]),
+    (1000, [1, 0, 1]),
+    (100, [0, 0, 1]),
+    (5, [3, 2]),
+    (7, [1, 2, 4]),
+    (0, [1, 2, 3]),
+    (100, [7]),
+    (0, [7]),
+    (1, [1, 3]),
+    (100, [0, 1]),
+]
+
+SPLIT_WEIGHTED_ZERO_WEIGHT_CASES = [
+    (1000, [1, 0, 1]),
+    (100, [0, 0, 1]),
+    (100, [0, 1]),
+]
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "tier", "expected"),
+    [
+        (1000, "bronze", 1000),
+        (1000, "silver", 950),
+        (1000, "gold", 900),
+        (1000, "platinum", 850),
+        (100, "silver", 95),
+        (20, "silver", 19),
+        (12345, "bronze", 12345),
+        (12345, "silver", 11728),
+        (999, "gold", 899),
+        (999, "platinum", 849),
+        (12345, "gold", 11111),
+    ],
+)
+def test_apply_tier_discount_typical(total_cents, tier, expected):
+    assert apply_tier_discount(total_cents, tier) == expected
+
+
+@pytest.mark.parametrize("tier", ALL_TIERS)
+def test_apply_tier_discount_zero_total(tier):
+    assert apply_tier_discount(0, tier) == 0
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "tier", "expected"),
+    [
+        (10, "platinum", 9),
+        (30, "silver", 29),
+        (25, "gold", 23),
+        (110, "silver", 105),
+        (50, "platinum", 43),
+        (12345, "gold", 11111),
+        (5, "gold", 5),
+        (10, "silver", 10),
+        (30, "platinum", 26),
+        (110, "platinum", 94),
+    ],
+)
+def test_apply_tier_discount_half_up_rounding(total_cents, tier, expected):
+    assert apply_tier_discount(total_cents, tier) == expected
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "tier", "expected"),
+    [
+        (1, "bronze", 1),
+        (1, "silver", 1),
+        (1, "gold", 1),
+        (1, "platinum", 1),
+        (2, "platinum", 2),
+        (9, "platinum", 8),
+    ],
+)
+def test_apply_tier_discount_fraction_near_half(total_cents, tier, expected):
+    assert apply_tier_discount(total_cents, tier) == expected
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "tier", "message"),
+    [
+        (-1, "gold", r"total_cents must be >= 0"),
+        (-100, 0, r"total_cents must be >= 0"),
+        (0, -100, r"unknown tier: -100"),
+        (100, "diamond", r"unknown tier: 'diamond'"),
+        (100, "Gold", r"unknown tier: 'Gold'"),
+        (100, "GOLD", r"unknown tier: 'GOLD'"),
+        (100, "", r"unknown tier: ''"),
+        (100, "gold ", r"unknown tier: 'gold '"),
+        (100, None, r"unknown tier: None"),
+    ],
+)
+def test_apply_tier_discount_invalid_input(total_cents, tier, message):
+    with pytest.raises(ValueError, match=message):
+        apply_tier_discount(total_cents, tier)
+
+
+def test_apply_tier_discount_negative_total_checked_before_tier():
+    with pytest.raises(ValueError, match=r"total_cents must be >= 0"):
+        apply_tier_discount(-1, "diamond")
+
+
+def test_apply_tier_discount_returns_int():
+    assert isinstance(apply_tier_discount(1000, "silver"), int)
+    assert isinstance(apply_tier_discount(12345, "gold"), int)
+
+
+@pytest.mark.parametrize("total_cents", [0, 1, 7, 99, 100, 999, 12345, 999999])
+@pytest.mark.parametrize("tier", ALL_TIERS)
+def test_apply_tier_discount_result_within_bounds(total_cents, tier):
+    result = apply_tier_discount(total_cents, tier)
+    assert 0 <= result <= total_cents
+
+
+@pytest.mark.parametrize("total_cents", [0, 1, 10, 999, 12345])
+def test_apply_tier_discount_bronze_returns_input(total_cents):
+    assert apply_tier_discount(total_cents, "bronze") == total_cents
+
+
+@pytest.mark.parametrize("total_cents", [0, 10, 1000, 12345])
+def test_apply_tier_discount_monotonic_by_tier(total_cents):
+    results = [apply_tier_discount(total_cents, tier) for tier in ALL_TIERS]
+    assert results == sorted(results, reverse=True)
+
+
+@pytest.mark.parametrize(
+    ("qty", "expected"),
+    [
+        (0, 0),
+        (1, 0),
+        (5, 0),
+        (10, 3),
+        (25, 3),
+        (50, 7),
+        (75, 7),
+        (100, 12),
+        (250, 12),
+        (1000000, 12),
+    ],
+)
+def test_bulk_discount_percent_typical(qty, expected):
+    assert bulk_discount_percent(qty) == expected
+
+
+@pytest.mark.parametrize(
+    ("qty", "expected"),
+    [
+        (9, 0),
+        (10, 3),
+        (49, 3),
+        (50, 7),
+        (99, 7),
+        (100, 12),
+        (101, 12),
+    ],
+)
+def test_bulk_discount_percent_threshold_inclusive(qty, expected):
+    assert bulk_discount_percent(qty) == expected
+
+
+@pytest.mark.parametrize("qty", [-1, -100])
+def test_bulk_discount_percent_negative_qty(qty):
+    with pytest.raises(ValueError, match=r"qty must be >= 0"):
+        bulk_discount_percent(qty)
+
+
+def test_bulk_discount_percent_returns_int():
+    assert isinstance(bulk_discount_percent(10), int)
+    assert isinstance(bulk_discount_percent(0), int)
+
+
+@pytest.mark.parametrize("qty", [0, 1, 9, 10, 49, 50, 99, 100, 101, 1000, 1000000])
+def test_bulk_discount_percent_allowed_values(qty):
+    assert bulk_discount_percent(qty) in {0, 3, 7, 12}
+
+
+def test_bulk_discount_percent_monotonic():
+    values = [bulk_discount_percent(qty) for qty in range(0, 130)]
+    assert values == sorted(values)
+
+
+@pytest.mark.parametrize(
+    ("amount_cents", "parts", "expected"),
+    [
+        (100, 4, [25, 25, 25, 25]),
+        (101, 4, [26, 25, 25, 25]),
+        (103, 4, [26, 26, 26, 25]),
+        (10, 3, [4, 3, 3]),
+        (100, 3, [34, 33, 33]),
+        (1000, 3, [334, 333, 333]),
+        (5, 1, [5]),
+        (7, 6, [2, 1, 1, 1, 1, 1]),
+        (11, 10, [2, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
+        (19, 10, [2, 2, 2, 2, 2, 2, 2, 2, 2, 1]),
+        (6, 4, [2, 2, 1, 1]),
+    ],
+)
+def test_split_payment_typical(amount_cents, parts, expected):
+    assert split_payment(amount_cents, parts) == expected
+
+
+@pytest.mark.parametrize(
+    ("amount_cents", "parts", "expected"),
+    [
+        (1, 1, [1]),
+        (7, 7, [1, 1, 1, 1, 1, 1, 1]),
+        (9, 3, [3, 3, 3]),
+    ],
+)
+def test_split_payment_boundary(amount_cents, parts, expected):
+    assert split_payment(amount_cents, parts) == expected
+
+
+@pytest.mark.parametrize(
+    ("amount_cents", "parts"),
+    [(0, 1), (0, 2), (2, 3), (5, 6), (3, 5)],
+)
+def test_split_payment_amount_less_than_parts(amount_cents, parts):
+    with pytest.raises(ValueError, match=r"amount_cents is less than number of parts"):
+        split_payment(amount_cents, parts)
+
+
+@pytest.mark.parametrize(
+    ("amount_cents", "parts", "message"),
+    [
+        (-1, 2, r"amount_cents must be >= 0"),
+        (-100, 1, r"amount_cents must be >= 0"),
+        (100, 0, r"parts must be >= 1"),
+        (100, -3, r"parts must be >= 1"),
+        (0, 0, r"parts must be >= 1"),
+        (-5, 0, r"amount_cents must be >= 0"),
+    ],
+)
+def test_split_payment_invalid_input(amount_cents, parts, message):
+    with pytest.raises(ValueError, match=message):
+        split_payment(amount_cents, parts)
+
+
+@pytest.mark.parametrize(("amount_cents", "parts"), SPLIT_PAYMENT_VALID_CASES)
+def test_split_payment_sum_matches_amount(amount_cents, parts):
+    assert sum(split_payment(amount_cents, parts)) == amount_cents
+
+
+@pytest.mark.parametrize(("amount_cents", "parts"), SPLIT_PAYMENT_VALID_CASES)
+def test_split_payment_length_equals_parts(amount_cents, parts):
+    assert len(split_payment(amount_cents, parts)) == parts
+
+
+@pytest.mark.parametrize(("amount_cents", "parts"), SPLIT_PAYMENT_VALID_CASES)
+def test_split_payment_parts_differ_by_at_most_one(amount_cents, parts):
+    result = split_payment(amount_cents, parts)
+    assert max(result) - min(result) <= 1
+
+
+@pytest.mark.parametrize(("amount_cents", "parts"), SPLIT_PAYMENT_POSITIVE_CASES)
+def test_split_payment_parts_positive(amount_cents, parts):
+    assert all(part > 0 for part in split_payment(amount_cents, parts))
+
+
+@pytest.mark.parametrize(("amount_cents", "parts"), SPLIT_PAYMENT_VALID_CASES)
+def test_split_payment_non_increasing(amount_cents, parts):
+    result = split_payment(amount_cents, parts)
+    assert result == sorted(result, reverse=True)
+
+
+def test_split_payment_returns_int_list():
+    result = split_payment(101, 4)
+    assert isinstance(result, list)
+    assert all(isinstance(part, int) for part in result)
+
+
+@pytest.mark.parametrize(
+    ("amount_cents", "weights", "expected"),
+    [
+        (100, [50, 50], [50, 50]),
+        (100, [1, 1, 1], [34, 33, 33]),
+        (100, [1, 1, 1, 1], [25, 25, 25, 25]),
+        (100, [1, 2], [33, 67]),
+        (100, [2, 3], [40, 60]),
+        (99, [2, 3], [40, 59]),
+        (101, [2, 3], [40, 61]),
+        (50, [1, 1, 1], [17, 17, 16]),
+        (101, [1, 1, 1], [34, 34, 33]),
+        (103, [1, 1, 1], [35, 34, 34]),
+        (10, [1, 1, 1], [4, 3, 3]),
+        (3, [1, 1, 1], [1, 1, 1]),
+        (2, [1, 1, 1], [1, 1, 0]),
+        (1, [1, 1], [1, 0]),
+        (1, [1, 1, 1], [1, 0, 0]),
+        (100, [1, 1, 2], [25, 25, 50]),
+        (100, [3, 3, 3, 1], [30, 30, 30, 10]),
+        (101, [3, 3, 3, 1], [31, 30, 30, 10]),
+        (1000, [1, 0, 1], [500, 0, 500]),
+        (100, [0, 0, 1], [0, 0, 100]),
+        (5, [3, 2], [3, 2]),
+        (7, [1, 2, 4], [1, 2, 4]),
+    ],
+)
+def test_split_weighted_typical(amount_cents, weights, expected):
+    assert split_weighted(amount_cents, weights) == expected
+
+
+@pytest.mark.parametrize(
+    ("amount_cents", "weights", "expected"),
+    [
+        (0, [1, 2, 3], [0, 0, 0]),
+        (100, [7], [100]),
+        (0, [7], [0]),
+        (1, [1, 1], [1, 0]),
+        (1, [1, 3], [0, 1]),
+        (101, [3, 3, 3, 1], [31, 30, 30, 10]),
+        (100, [0, 1], [0, 100]),
+    ],
+)
+def test_split_weighted_boundary(amount_cents, weights, expected):
+    assert split_weighted(amount_cents, weights) == expected
+
+
+@pytest.mark.parametrize(
+    ("amount_cents", "weights", "message"),
+    [
+        (-1, [1, 2], r"amount_cents must be >= 0"),
+        (100, [], r"weights must not be empty"),
+        (0, [], r"weights must not be empty"),
+        (100, [1, -1], r"weights must be >= 0"),
+        (100, [-5, 10], r"weights must be >= 0"),
+        (100, [0, 0], r"weights sum must be > 0"),
+        (0, [0, 0, 0], r"weights sum must be > 0"),
+        (-1, [], r"amount_cents must be >= 0"),
+        (-1, [-2], r"amount_cents must be >= 0"),
+    ],
+)
+def test_split_weighted_invalid_input(amount_cents, weights, message):
+    with pytest.raises(ValueError, match=message):
+        split_weighted(amount_cents, weights)
+
+
+@pytest.mark.parametrize(("amount_cents", "weights"), SPLIT_WEIGHTED_VALID_CASES)
+def test_split_weighted_sum_matches_amount(amount_cents, weights):
+    assert sum(split_weighted(amount_cents, weights)) == amount_cents
+
+
+@pytest.mark.parametrize(("amount_cents", "weights"), SPLIT_WEIGHTED_VALID_CASES)
+def test_split_weighted_length_matches_weights(amount_cents, weights):
+    assert len(split_weighted(amount_cents, weights)) == len(weights)
+
+
+@pytest.mark.parametrize(("amount_cents", "weights"), SPLIT_WEIGHTED_ZERO_WEIGHT_CASES)
+def test_split_weighted_zero_weight_gets_zero(amount_cents, weights):
+    result = split_weighted(amount_cents, weights)
+    assert all(part == 0 for part, weight in zip(result, weights) if weight == 0)
+
+
+@pytest.mark.parametrize(("amount_cents", "weights"), SPLIT_WEIGHTED_VALID_CASES)
+def test_split_weighted_part_is_floor_or_floor_plus_one(amount_cents, weights):
+    total_weight = sum(weights)
+    result = split_weighted(amount_cents, weights)
+    for part, weight in zip(result, weights):
+        base = amount_cents * weight // total_weight
+        assert part in (base, base + 1)
+
+
+def test_split_weighted_equal_weights_match_split_payment():
+    assert split_weighted(101, [1, 1, 1]) == split_payment(101, 3) == [34, 34, 33]
+
+
+def test_split_weighted_returns_int_list():
+    result = split_weighted(101, [2, 3])
+    assert isinstance(result, list)
+    assert all(isinstance(part, int) for part in result)
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "history_cents", "expected"),
+    [
+        (0, 0, 0),
+        (99, 0, 0),
+        (100, 0, 1),
+        (199, 0, 1),
+        (250, 0, 2),
+        (9999, 0, 99),
+        (12345, 0, 123),
+        (1000, 0, 10),
+        (1000, 50000, 10),
+        (1000, 100000, 20),
+        (1000, 250000, 20),
+        (1000, 499999, 20),
+        (1000, 500000, 30),
+        (1000, 1000000, 30),
+        (1500, 250000, 30),
+        (1500, 600000, 45),
+        (0, 500000, 0),
+        (99, 500000, 0),
+        (12345, 100000, 246),
+        (12345, 500000, 369),
+    ],
+)
+def test_points_for_order_typical(total_cents, history_cents, expected):
+    assert points_for_order(total_cents, history_cents) == expected
+
+
+def test_points_for_order_default_history():
+    assert points_for_order(0) == 0
+    assert points_for_order(1000) == 10
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "history_cents", "expected"),
+    [
+        (1000, 99999, 10),
+        (1000, 100000, 20),
+        (1000, 499999, 20),
+        (1000, 500000, 30),
+    ],
+)
+def test_points_for_order_threshold_inclusive(total_cents, history_cents, expected):
+    assert points_for_order(total_cents, history_cents) == expected
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "expected"),
+    [
+        (99, 0),
+        (100, 1),
+        (101, 1),
+        (199, 1),
+        (200, 2),
+    ],
+)
+def test_points_for_order_floor_of_hundreds(total_cents, expected):
+    assert points_for_order(total_cents, 0) == expected
+
+
+def test_points_for_order_multiplier_takes_largest_threshold():
+    assert points_for_order(1000, 500000) == 30
+    assert points_for_order(1500, 600000) == 45
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "history_cents", "message"),
+    [
+        (-1, 0, r"total_cents must be >= 0"),
+        (-100, 1000, r"total_cents must be >= 0"),
+        (100, -1, r"history_cents must be >= 0"),
+        (100, -100000, r"history_cents must be >= 0"),
+        (-1, -1, r"total_cents must be >= 0"),
+        (0, -1, r"history_cents must be >= 0"),
+    ],
+)
+def test_points_for_order_invalid_input(total_cents, history_cents, message):
+    with pytest.raises(ValueError, match=message):
+        points_for_order(total_cents, history_cents)
+
+
+def test_points_for_order_returns_int():
+    assert isinstance(points_for_order(12345, 500000), int)
+    assert isinstance(points_for_order(1000), int)
+
+
+@pytest.mark.parametrize(
+    ("total_cents", "history_cents"),
+    [
+        (100, 0),
+        (100, 100000),
+        (1000, 0),
+        (1000, 100000),
+        (1000, 500000),
+        (12345, 500000),
+    ],
+)
+def test_points_for_order_multiple_of_base(total_cents, history_cents):
+    base = total_cents // 100
+    assert points_for_order(total_cents, history_cents) % base == 0
+
+
+@pytest.mark.parametrize("total_cents", [100, 1000, 12345])
+def test_points_for_order_triple_at_max_history(total_cents):
+    assert points_for_order(total_cents, 500000) == 3 * points_for_order(total_cents, 0)
+
+
+@pytest.mark.parametrize("history_cents", [0, 99999, 100000, 499999, 500000, 1000000])
+def test_points_for_order_small_total_always_zero(history_cents):
+    assert points_for_order(99, history_cents) == 0
+
+
+def test_expire_points_accrual_day_valid():
+    assert expire_points([("2024-01-01", 10)], date(2024, 1, 1)) == 10
+
+
+def test_expire_points_last_day_normal_year():
+    assert expire_points([("2023-01-01", 10)], date(2024, 1, 1)) == 10
+
+
+def test_expire_points_first_day_after_expiry():
+    assert expire_points([("2023-01-01", 10)], date(2024, 1, 2)) == 0
+
+
+def test_expire_points_mixed_expired_and_valid():
+    entries = [("2024-01-01", 10), ("2024-06-15", 20), ("2020-01-01", 100)]
+    assert expire_points(entries, date(2024, 7, 1)) == 30
+
+
+def test_expire_points_all_expired():
+    entries = [("2020-01-01", 50), ("2021-05-05", 60)]
+    assert expire_points(entries, date(2024, 7, 1)) == 0
+
+
+def test_expire_points_empty_list():
+    assert expire_points([], date(2024, 7, 1)) == 0
+
+
+def test_expire_points_future_accrual():
+    assert expire_points([("2024-06-01", 10)], date(2024, 5, 31)) == 0
+
+
+def test_expire_points_zero_points():
+    assert expire_points([("2024-01-01", 0)], date(2024, 1, 1)) == 0
+
+
+@pytest.mark.parametrize(
+    ("entries", "on_date", "expected"),
+    [
+        ([("2024-01-01", 10)], date(2024, 1, 1), 10),
+        ([("2024-01-01", 10)], date(2024, 12, 31), 10),
+        ([("2024-01-01", 10)], date(2025, 1, 1), 0),
+        ([("2023-01-01", 10)], date(2024, 1, 1), 10),
+        ([("2023-01-01", 10)], date(2024, 1, 2), 0),
+        ([("2023-03-01", 5)], date(2024, 2, 28), 5),
+        ([("2023-03-01", 5)], date(2024, 2, 29), 5),
+        ([("2023-03-01", 5)], date(2024, 3, 1), 0),
+        ([("2024-02-29", 5)], date(2025, 2, 28), 5),
+        ([("2024-02-29", 5)], date(2025, 3, 1), 0),
+        ([("2023-12-31", 10)], date(2024, 12, 30), 10),
+        ([("2023-12-31", 10)], date(2024, 12, 31), 0),
+        ([("2024-01-01", 10)], date(2023, 12, 31), 0),
+    ],
+)
+def test_expire_points_window_365_days_boundaries(entries, on_date, expected):
+    assert expire_points(entries, on_date) == expected
+
+
+@pytest.mark.parametrize(
+    "iso",
+    [
+        "2024-13-01",
+        "2024-02-30",
+        "01-01-2024",
+        "2024/01/01",
+        "2024-1-1",
+        "not-a-date",
+    ],
+)
+def test_expire_points_invalid_isoformat(iso):
+    with pytest.raises(ValueError):
+        expire_points([(iso, 10)], date(2024, 7, 1))
+
+
+def test_expire_points_window_includes_both_ends():
+    entries = [("2024-01-01", 10)]
+    accrual = date(2024, 1, 1)
+    assert expire_points(entries, accrual) == 10
+    assert expire_points(entries, accrual + timedelta(days=365)) == 10
+    assert expire_points(entries, accrual + timedelta(days=366)) == 0
+
+
+def test_expire_points_order_independent():
+    entries = [("2024-01-01", 10), ("2024-06-15", 20), ("2023-05-05", 5)]
+    on_date = date(2024, 7, 1)
+    assert expire_points(entries, on_date) == expire_points(list(reversed(entries)), on_date)
+
+
+def test_ordercalc_package_import():
+    assert ordercalc.__name__ == "ordercalc"
+
+
+def test_ordercalc_all():
+    assert ordercalc.__all__ == ["discounts", "split", "loyalty"]
+
+
+def test_ordercalc_submodules():
+    assert ordercalc.discounts is discounts
+    assert ordercalc.split is split
+    assert ordercalc.loyalty is loyalty
+
+
+def test_ordercalc_public_functions_importable():
+    assert callable(apply_tier_discount)
+    assert callable(bulk_discount_percent)
+    assert callable(split_payment)
+    assert callable(split_weighted)
+    assert callable(points_for_order)
+    assert callable(expire_points)

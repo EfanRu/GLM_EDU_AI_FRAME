@@ -1,0 +1,11 @@
+{
+  "level": "L1",
+  "approach": "direct_api",
+  "model": "GLM-5.3-Flash (через сессию)",
+  "executor": "session-subagent",
+  "wall_seconds": 225.9,
+  "iterations": 1,
+  "internal_subagent_tokens": 31881,
+  "tool_uses": 1,
+  "note": "Эмуляция однострельного вызова субагентом сессии; токены посчитаны tiktoken по протоколу L1 (промпт+ответ)."
+}

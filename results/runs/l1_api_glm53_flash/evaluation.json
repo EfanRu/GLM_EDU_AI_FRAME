@@ -1,0 +1,39 @@
+{
+  "run": "l1_api_glm53_flash",
+  "meta": {
+    "level": "L1",
+    "approach": "direct_api",
+    "model": "GLM-5.3-Flash (через сессию)",
+    "executor": "session-subagent",
+    "wall_seconds": 225.9,
+    "iterations": 1,
+    "internal_subagent_tokens": 31881,
+    "tool_uses": 1,
+    "note": "Эмуляция однострельного вызова субагентом сессии; токены посчитаны tiktoken по протоколу L1 (промпт+ответ)."
+  },
+  "token_method": "tiktoken/cl100k_base",
+  "v1_test_funcs": 32,
+  "v2_asserts": 40,
+  "q1_collectable": 1,
+  "q2_passed": 171,
+  "q2_total": 171,
+  "q2_passed_pct": 100.0,
+  "pytest_clean_tail": "........................................................................ [ 42%]\n........................................................................ [ 84%]\n...........................                                              [100%]\n171 passed in 0.10s",
+  "q_combined_pct": 100.0,
+  "q3_line_pct": 100.0,
+  "q4_branch_pct": 100.0,
+  "q5_bugs": {
+    "bug1": true,
+    "bug2": true,
+    "bug3": true,
+    "bug4": true,
+    "bug5": true
+  },
+  "q5_bugs_caught": 5,
+  "q5_total_bugs": 5,
+  "q5_detection_pct": 100.0,
+  "e1_in_tokens": 1926,
+  "e2_out_tokens": 8223,
+  "token_source": "tiktoken/cl100k_base",
+  "e4_wall_seconds": 225.9
+}

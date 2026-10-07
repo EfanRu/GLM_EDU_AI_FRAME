@@ -1,0 +1,29 @@
+{
+  "run": "ref",
+  "meta": {},
+  "token_method": "tiktoken/cl100k_base",
+  "v1_test_funcs": 24,
+  "v2_asserts": 32,
+  "q1_collectable": 1,
+  "q2_passed": 60,
+  "q2_total": 60,
+  "q2_passed_pct": 100.0,
+  "pytest_clean_tail": "............................................................             [100%]\n60 passed in 0.04s",
+  "q_combined_pct": 100.0,
+  "q3_line_pct": 100.0,
+  "q4_branch_pct": 100.0,
+  "q5_bugs": {
+    "bug1": true,
+    "bug2": true,
+    "bug3": true,
+    "bug4": true,
+    "bug5": true
+  },
+  "q5_bugs_caught": 5,
+  "q5_total_bugs": 5,
+  "q5_detection_pct": 100.0,
+  "e1_in_tokens": 0,
+  "e2_out_tokens": 2165,
+  "token_source": "tiktoken/cl100k_base",
+  "e4_wall_seconds": null
+}

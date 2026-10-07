@@ -1,0 +1,38 @@
+{
+  "run": "l2_mini",
+  "meta": {
+    "level": "L2",
+    "approach": "mini_harness",
+    "model": "GLM-5.3 (через сессию)",
+    "executor": "session-subagent",
+    "wall_seconds": 472.9,
+    "iterations": 3,
+    "tool_calls": 2,
+    "note": "Релейная эмуляция цикла mini_agent.py: агент просит RUN_TESTS, оператор (харнесс) возвращает вывод pytest. Токены: tiktoken по всем промптам и ответам."
+  },
+  "token_method": "tiktoken/cl100k_base",
+  "v1_test_funcs": 36,
+  "v2_asserts": 47,
+  "q1_collectable": 1,
+  "q2_passed": 149,
+  "q2_total": 149,
+  "q2_passed_pct": 100.0,
+  "pytest_clean_tail": "........................................................................ [ 48%]\n........................................................................ [ 96%]\n.....                                                                    [100%]\n149 passed in 0.10s",
+  "q_combined_pct": 100.0,
+  "q3_line_pct": 100.0,
+  "q4_branch_pct": 100.0,
+  "q5_bugs": {
+    "bug1": true,
+    "bug2": true,
+    "bug3": true,
+    "bug4": true,
+    "bug5": true
+  },
+  "q5_bugs_caught": 5,
+  "q5_total_bugs": 5,
+  "q5_detection_pct": 100.0,
+  "e1_in_tokens": 2497,
+  "e2_out_tokens": 16012,
+  "token_source": "tiktoken/cl100k_base",
+  "e4_wall_seconds": 472.9
+}

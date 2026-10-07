@@ -1,0 +1,131 @@
+"""Скидки.
+
+Правила (эталон):
+- total_cents — сумма заказа в центах, int >= 0.
+- Уровни: bronze 0%, silver 5%, gold 10%, platinum 15%.
+- Неизвестный уровень или отрицательная сумма -> ValueError.
+- Округление до целых центов — арифметическое (half-up): 294.5 -> 295.
+"""
+
+from decimal import Decimal, ROUND_HALF_UP
+
+TIERS = {"bronze": 0, "silver": 5, "gold": 10, "platinum": 15}
+
+
+def apply_tier_discount(total_cents: int, tier: str) -> int:
+    """Вернуть сумму с учётом скидки уровня, в центах."""
+    if total_cents < 0:
+        raise ValueError("total_cents must be >= 0")
+    pct = TIERS.get(tier)
+    if pct is None:
+        raise ValueError(f"unknown tier: {tier!r}")
+    discounted = Decimal(total_cents) * (Decimal(100 - pct) / Decimal(100))
+    return int(discounted.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def bulk_discount_percent(qty: int) -> int:
+    """Скидка за объём в процентах: от 10 шт. — 3%, от 50 шт. — 7%, от 100 шт. — 12%.
+
+    Граница «от N шт.» включает N (qty >= N).
+    """
+    if qty < 0:
+        raise ValueError("qty must be >= 0")
+    if qty >= 100:
+        return 12
+    if qty >= 50:
+        return 7
+    if qty >= 10:
+        return 3
+    return 0
+"""Разбиение суммы заказа на части.
+
+Правила (эталон):
+- Все суммы — целые центы (int).
+- split_payment: parts частей, остаток от деления раздаётся по одному центу
+  первым частям. Сумма частей обязана равняться исходной сумме.
+- split_weighted: пропорционально весам, методом наибольших остатков
+  (сначала floor, затем недостающие центы получают части с наибольшей
+  дробной частью; при равенстве — та, что раньше в списке).
+"""
+
+import math
+
+
+def split_payment(amount_cents: int, parts: int) -> list:
+    """Разбить amount_cents на parts частей целыми центами.
+
+    Если amount_cents < parts — ValueError (не хватит по центу на часть).
+    """
+    if amount_cents < 0:
+        raise ValueError("amount_cents must be >= 0")
+    if parts < 1:
+        raise ValueError("parts must be >= 1")
+    if amount_cents < parts:
+        raise ValueError("amount_cents is less than number of parts")
+    base, rem = divmod(amount_cents, parts)
+    return [base + 1] * rem + [base] * (parts - rem)
+
+
+def split_weighted(amount_cents: int, weights: list) -> list:
+    """Разбить amount_cents пропорционально весам weights (list[int] >= 0, сумма > 0).
+
+    Возвращает список из len(weights) целых цент-сумм, в сумме равный amount_cents.
+    """
+    if amount_cents < 0:
+        raise ValueError("amount_cents must be >= 0")
+    if not weights:
+        raise ValueError("weights must not be empty")
+    if any(w < 0 for w in weights):
+        raise ValueError("weights must be >= 0")
+    total_w = sum(weights)
+    if total_w == 0:
+        raise ValueError("weights sum must be > 0")
+
+    exact = [amount_cents * w / total_w for w in weights]
+    base = [int(math.floor(e)) for e in exact]
+    rem = amount_cents - sum(base)
+    # наибольшие дробные части получают по центу; при равенстве — раньше в списке
+    order = sorted(range(len(weights)), key=lambda i: (-(exact[i] - base[i]), i))
+    for i in order[:rem]:
+        base[i] += 1
+    return base
+"""Баллы лояльности.
+
+Правила (эталон):
+- points_for_order: 1 балл за каждые ПОЛНОЕ число сотен центов в заказе;
+  множитель по истории покупок: >= 100000 центов (1000.00) — x2,
+  >= 500000 центов (5000.00) — x3 (проверяется от большего порога).
+- expire_points: баллы живут 365 календарных дней со дня начисления,
+  включительно; на день accrual + 365 балл ещё действует.
+"""
+
+from datetime import date, timedelta
+
+
+def points_for_order(total_cents: int, history_cents: int = 0) -> int:
+    """Начислить баллы за заказ total_cents с учётом истории history_cents."""
+    if total_cents < 0:
+        raise ValueError("total_cents must be >= 0")
+    if history_cents < 0:
+        raise ValueError("history_cents must be >= 0")
+    base = total_cents // 100
+    if history_cents >= 500000:
+        multiplier = 3
+    elif history_cents >= 100000:
+        multiplier = 2
+    else:
+        multiplier = 1
+    return base * multiplier
+
+
+def expire_points(entries, on_date: date) -> int:
+    """Суммировать действительные на on_date баллы.
+
+    entries — список пар (ISO-дата начисления, количество баллов).
+    """
+    total = 0
+    for iso, points in entries:
+        accrued = date.fromisoformat(iso)
+        if accrued <= on_date <= accrued + timedelta(days=365):
+            total += points
+    return total

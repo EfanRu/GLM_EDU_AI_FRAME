@@ -1,0 +1,43 @@
+{
+  "run": "l4_multi",
+  "meta": {
+    "level": "L4",
+    "approach": "mcp_multiagent",
+    "model": "GLM-5.3 (через сессию)",
+    "executor": "session-subagent",
+    "wall_seconds": 723.0,
+    "iterations": 4,
+    "roles": [
+      "аналитик (210с, план)",
+      "писатель (272с, 61 функция)",
+      "критик (240с, MCP-инструменты, 1 цикл правок)"
+    ],
+    "internal_subagent_tokens": 507114,
+    "note": "Конвейер из 3 субагентов; критик вызывал инструменты через настоящий MCP-сервер (tools/mcp_client.py -> mcp_testserver.py, JSON-RPC stdio). Токены: tiktoken по инструкциям/плану/артефактам; внутренние tool-выводы учтены частично (см. REPORT)."
+  },
+  "token_method": "tiktoken/cl100k_base",
+  "v1_test_funcs": 61,
+  "v2_asserts": 77,
+  "q1_collectable": 1,
+  "q2_passed": 421,
+  "q2_total": 421,
+  "q2_passed_pct": 100.0,
+  "pytest_clean_tail": "..................................................... [ 34%]\n........................................................................ [ 51%]\n........................................................................ [ 68%]\n........................................................................ [ 85%]\n.............................................................            [100%]\n421 passed in 0.23s",
+  "q_combined_pct": 100.0,
+  "q3_line_pct": 100.0,
+  "q4_branch_pct": 100.0,
+  "q5_bugs": {
+    "bug1": true,
+    "bug2": true,
+    "bug3": true,
+    "bug4": true,
+    "bug5": true
+  },
+  "q5_bugs_caught": 5,
+  "q5_total_bugs": 5,
+  "q5_detection_pct": 100.0,
+  "e1_in_tokens": 24374,
+  "e2_out_tokens": 6797,
+  "token_source": "tiktoken/cl100k_base",
+  "e4_wall_seconds": 723.0
+}

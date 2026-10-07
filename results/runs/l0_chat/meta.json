@@ -1,0 +1,11 @@
+{
+  "level": "L0",
+  "approach": "chat",
+  "model": "GLM-5.3 (через сессию)",
+  "executor": "session-subagent",
+  "wall_seconds": 202.4,
+  "iterations": 1,
+  "internal_subagent_tokens": 33481,
+  "tool_uses": 1,
+  "note": "Эмуляция однострельного вызова субагентом сессии; токены посчитаны tiktoken по протоколу L1 (промпт+ответ)."
+}
